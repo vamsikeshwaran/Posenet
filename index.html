@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Live Pose Estimation with Angle Calculation</title>
+    <style>
+        body {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            margin: 0;
+            background-color: #f0f0f0;
+        }
+        video, canvas {
+            position: absolute;
+            width: 100vw;
+            height: 100vh;
+        }
+    </style>
+</head>
+<body>
+    <video id="video" autoplay playsinline></video>
+    <canvas id="canvas"></canvas>
+
+    <!-- Load TensorFlow.js -->
+    <script src="https://unpkg.com/@tensorflow/tfjs"></script>
+    <!-- Load PoseNet -->
+    <script src="https://unpkg.com/@tensorflow-models/posenet"></script>
+    <script>
+        async function setupCamera() {
+            const video = document.getElementById('video');
+            video.width = 640;
+            video.height = 480;
+
+            // Access the user's webcam
+            const stream = await navigator.mediaDevices.getUserMedia({
+                video: true
+            });
+            video.srcObject = stream;
+
+            return new Promise((resolve) => {
+                video.onloadedmetadata = () => {
+                    resolve(video);
+                };
+            });
+        }
+
+        function calculateAngle(pointA, pointB, pointC) {
+            const AB = {
+                x: pointB.x - pointA.x,
+                y: pointB.y - pointA.y
+            };
+            const BC = {
+                x: pointC.x - pointB.x,
+                y: pointC.y - pointB.y
+            };
+            const dotProduct = AB.x * BC.x + AB.y * BC.y;
+            const magnitudeAB = Math.sqrt(AB.x * AB.x + AB.y * AB.y);
+            const magnitudeBC = Math.sqrt(BC.x * BC.x + BC.y * BC.y);
+            const angle = Math.acos(dotProduct / (magnitudeAB * magnitudeBC)) * (180 / Math.PI);
+            return angle;
+        }
+
+        let upCount = 0; // Counter for angles greater than 120
+        let leftElbowAbove120 = false; // Flag for left elbow
+        let rightElbowAbove120 = false; // Flag for right elbow
+        const smoothingFactor = 0.9; // Smoothing factor for angle calculation
+        let leftAngleSmooth = 0; // Smoothed left angle
+        let rightAngleSmooth = 0; // Smoothed right angle
+
+        async function main() {
+            const video = await setupCamera();
+            video.play();
+
+            const canvas = document.getElementById('canvas');
+            const ctx = canvas.getContext('2d');
+            canvas.width = video.width;
+            canvas.height = video.height;
+
+            // Load the PoseNet model
+            const net = await posenet.load();
+            console.log('PoseNet model loaded');
+
+            async function detectPose() {
+                const pose = await net.estimateSinglePose(video, {
+                    imageScaleFactor: 0.5,
+                    flipHorizontal: false,
+                    outputStride: 16
+                });
+
+                // Clear the canvas
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+                // Draw the video frame onto the canvas
+                ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+                // Calculate and display the left elbow angle
+                const leftShoulder = pose.keypoints.find(k => k.part === 'leftShoulder');
+                const leftElbow = pose.keypoints.find(k => k.part === 'leftElbow');
+                const leftWrist = pose.keypoints.find(k => k.part === 'leftWrist');
+
+                if (leftShoulder.score > 0.5 && leftElbow.score > 0.5 && leftWrist.score > 0.5) {
+                    const leftAngle = calculateAngle(leftShoulder.position, leftElbow.position, leftWrist.position);
+                    leftAngleSmooth = smoothingFactor * leftAngleSmooth + (1 - smoothingFactor) * leftAngle; // Smooth the angle
+                    ctx.font = '20px Arial';
+                    ctx.fillStyle = 'blue';
+                    ctx.fillText(`Left Angle: ${Math.round(leftAngleSmooth)}°`, leftElbow.position.x + 10, leftElbow.position.y);
+
+                    // Update counts based on the smoothed angle
+                    if (leftAngleSmooth > 120 && !leftElbowAbove120) {
+                        upCount++;
+                        leftElbowAbove120 = true; // Set the flag
+                    } else if (leftAngleSmooth <= 120) {
+                        leftElbowAbove120 = false; // Reset the flag
+                    }
+                }
+
+                // Calculate and display the right elbow angle
+                const rightShoulder = pose.keypoints.find(k => k.part === 'rightShoulder');
+                const rightElbow = pose.keypoints.find(k => k.part === 'rightElbow');
+                const rightWrist = pose.keypoints.find(k => k.part === 'rightWrist');
+
+                if (rightShoulder.score > 0.5 && rightElbow.score > 0.5 && rightWrist.score > 0.5) {
+                    const rightAngle = calculateAngle(rightShoulder.position, rightElbow.position, rightWrist.position);
+                    rightAngleSmooth = smoothingFactor * rightAngleSmooth + (1 - smoothingFactor) * rightAngle; // Smooth the angle
+                    ctx.font = '20px Arial';
+                    ctx.fillStyle = 'blue';
+                    ctx.fillText(`Right Angle: ${Math.round(rightAngleSmooth)}°`, rightElbow.position.x + 10, rightElbow.position.y);
+
+                    // Update counts based on the smoothed angle
+                    if (rightAngleSmooth > 120 && !rightElbowAbove120) {
+                        upCount++;
+                        rightElbowAbove120 = true; // Set the flag
+                    } else if (rightAngleSmooth <= 120) {
+                        rightElbowAbove120 = false; // Reset the flag
+                    }
+                }
+
+                // Display the up count
+                ctx.font = '20px Arial';
+                ctx.fillStyle = 'red';
+                ctx.fillText(`Up: ${upCount}`, 10, 30);
+
+                requestAnimationFrame(detectPose);
+            }
+
+            detectPose();
+        }
+
+        main();
+    </script>
+</body>
+</html>
